@@ -9,4 +9,33 @@
  :itonami.blueprint/required-technologies [:robotics :identity :forms :dmn :bpmn :audit-ledger :cae]
  :itonami.blueprint/optional-technologies [:optimization :telemetry]
  :itonami.blueprint/status :public-oss
- :itonami.blueprint/maturity :blueprint}
+ :itonami.blueprint/maturity :implemented
+ :itonami.blueprint/implemented-slice
+ "ChocOpsAdvisor ⊣ Chocolate Governor, langgraph-clj StateGraph
+ (langgraph.graph, chocops.operation/build), append-only audit ledger
+ (chocops.store/ledger + append-ledger!, MemStore and a DatomicStore
+ backed by langchain.db via langchain-store.core). A back-office PLANT
+ OPERATIONS COORDINATION actor for cocoa/chocolate/sugar-confectionery
+ manufacturing -- not direct conching/tempering/molding-line equipment
+ control and not food-safety certification authority. Four ops
+ (`:log-production-batch` / `:schedule-maintenance` /
+ `:flag-food-safety-concern` / `:coordinate-shipment`), all `:effect
+ :propose` only. 18+ HARD invariants (op-not-allowed,
+ effect-not-propose, batch-not-registered, no-spec-basis,
+ evidence-incomplete, moisture/cocoa-content/particle-size/process-temp/
+ cadmium/viscosity out-of-window, foreign-material-detected,
+ metal-detector-calibration-overdue, weight-variance-excessive,
+ allergen-label-mismatch, sanitation-score-insufficient,
+ food-safety-flag-unresolved, already-processed,
+ already-shipment-finalized) elaborate this blueprint's Governor.
+ `:log-production-batch` and `:coordinate-shipment` (the two real
+ actuation events) plus `:flag-food-safety-concern` ALWAYS escalate to
+ a human plant operator via the compiled graph's `:request-approval`
+ node (`interrupt-before`, checkpoint-based resume); only
+ `:schedule-maintenance` is eligible to auto-commit when the Governor
+ is clean. Every commit/hold/approval-rejected decision lands in the
+ append-only ledger, and an approved `:log-production-batch` /
+ `:coordinate-shipment` also flips the batch's `:processed?` /
+ `:shipment-finalized?` flag on the Store -- 58 tests / 207 assertions
+ green (`clojure -M:dev:test`), demo runnable end-to-end against both
+ Store backends (`clojure -M:dev:run`)."}

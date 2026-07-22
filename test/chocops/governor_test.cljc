@@ -1,6 +1,7 @@
 (ns chocops.governor-test
   (:require [clojure.test :refer [deftest is testing]]
-            [chocops.governor :as governor]))
+            [chocops.governor :as governor]
+            [chocops.store :as store]))
 
 (def ^:private now-ms #?(:clj (System/currentTimeMillis) :cljs (.now js/Date)))
 (def ^:private ten-days-ago (- now-ms (* 10 24 60 60 1000)))
@@ -30,31 +31,44 @@
   (testing "log-production-batch against an unregistered batch is a hard violation"
     (let [req {:op :log-production-batch :subject "batch-ghost"}
           prop {:cites [{:spec "ISO-12345"}] :value {:jurisdiction :us/fda} :confidence 0.8}
-          result (governor/check req {:actor-id "gov-1"} prop {})]
+          result (governor/check req {:actor-id "gov-1"} prop (store/mem-store))]
       (is (true? (:hard? result)))
       (is (some #(= (:rule %) :batch-not-registered) (:violations result)))))
 
   (testing "schedule-maintenance against an unregistered batch is also a hard violation"
     (let [req {:op :schedule-maintenance :subject "batch-ghost"}
           prop {:cites [] :value {} :confidence 0.8}
-          result (governor/check req {:actor-id "gov-1"} prop {})]
+          result (governor/check req {:actor-id "gov-1"} prop (store/mem-store))]
       (is (true? (:hard? result)))
       (is (some #(= (:rule %) :batch-not-registered) (:violations result)))))
 
   (testing "a registered batch does not trigger this rule"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :schedule-maintenance :subject batch-id}
           prop {:cites [] :value {} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
       (is (not (some #(= (:rule %) :batch-not-registered) (:violations result)))))))
+
+;; ──────────────────────── Effect Invariant ──────────────────────
+
+(deftest effect-not-propose-violation-test
+  (testing "a proposal asserting a non-:propose effect is a hard, permanent block"
+    (let [batch-id "batch-001"
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
+          req {:op :schedule-maintenance :subject batch-id}
+          prop {:cites [{:spec "Equipment-Manual"}] :value {:jurisdiction :us/fda}
+                :effect :commit :confidence 0.9}
+          result (governor/check req {:actor-id "gov-1"} prop store)]
+      (is (true? (:hard? result)))
+      (is (some #(= (:rule %) :effect-not-propose) (:violations result))))))
 
 ;; ──────────────────────── Hard Violations ──────────────────────
 
 (deftest spec-basis-violation-test
   (testing "proposal with no jurisdiction citation is a hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [] :value {:jurisdiction nil}}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -63,7 +77,7 @@
 
   (testing "proposal with proper citation passes spec basis check"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda}}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -74,7 +88,7 @@
 (deftest moisture-violation-test
   (testing "batch with moisture out of range triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :moisture-percent 2.0)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :moisture-percent 2.0)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -83,7 +97,7 @@
 
   (testing "batch with moisture in range passes"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -94,7 +108,7 @@
 (deftest cocoa-content-violation-test
   (testing "batch with cocoa content below the product's minimum triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :cocoa-content-percent 20.0)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :cocoa-content-percent 20.0)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -103,12 +117,14 @@
 
   (testing "milk chocolate has a much lower cocoa-content floor than dark"
     (let [batch-id "batch-002"
-          store {:batches {batch-id (assoc clean-batch
-                                            :product-type :chocolate/milk
-                                            :process-temp-c 29.5
-                                            :cadmium-ppm 0.2
-                                            :viscosity-pa-s 3.0
-                                            :cocoa-content-percent 26.0)}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch
+                                   :product-type :chocolate/milk
+                                   :process-temp-c 29.5
+                                   :cadmium-ppm 0.2
+                                   :viscosity-pa-s 3.0
+                                   :cocoa-content-percent 26.0)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -119,7 +135,7 @@
 (deftest particle-size-violation-test
   (testing "batch with particle size exceeding the product's maximum triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :particle-size-microns 60)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :particle-size-microns 60)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -131,7 +147,7 @@
 (deftest process-temp-violation-test
   (testing "batch with process temperature out of the tempering window triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :process-temp-c 40.0)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :process-temp-c 40.0)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -143,7 +159,7 @@
 (deftest cadmium-violation-test
   (testing "batch with cadmium residue exceeding the product's limit triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :cadmium-ppm 1.5)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :cadmium-ppm 1.5)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -152,13 +168,15 @@
 
   (testing "white chocolate has a much stricter cadmium limit than dark"
     (let [batch-id "batch-002"
-          store {:batches {batch-id (assoc clean-batch
-                                            :product-type :chocolate/white
-                                            :moisture-percent 0.8
-                                            :cocoa-content-percent 22.0
-                                            :process-temp-c 28.5
-                                            :viscosity-pa-s 3.0
-                                            :cadmium-ppm 0.2)}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch
+                                   :product-type :chocolate/white
+                                   :moisture-percent 0.8
+                                   :cocoa-content-percent 22.0
+                                   :process-temp-c 28.5
+                                   :viscosity-pa-s 3.0
+                                   :cadmium-ppm 0.2)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -170,7 +188,7 @@
 (deftest viscosity-violation-test
   (testing "batch with viscosity exceeding the product's maximum triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :viscosity-pa-s 9.0)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :viscosity-pa-s 9.0)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -182,7 +200,7 @@
 (deftest foreign-material-violation-test
   (testing "batch with detected foreign material triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :foreign-material-detected? true)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :foreign-material-detected? true)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -194,7 +212,7 @@
 (deftest metal-detector-calibration-violation-test
   (testing "batch with overdue metal-detector calibration triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :metal-detector-last-calibration-date hundred-days-ago)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :metal-detector-last-calibration-date hundred-days-ago)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -206,7 +224,7 @@
 (deftest weight-variance-violation-test
   (testing "batch with excessive weight variance triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :weight-variance-grams 30)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :weight-variance-grams 30)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -218,7 +236,9 @@
 (deftest allergen-label-mismatch-violation-test
   (testing "cross-contact risk without a matching declaration triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :cross-contact-risk #{:milk :tree-nuts} :declared-allergens #{})}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch :cross-contact-risk #{:milk :tree-nuts} :declared-allergens #{})}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -227,7 +247,9 @@
 
   (testing "cross-contact risk WITH a complete declaration passes"
     (let [batch-id "batch-002"
-          store {:batches {batch-id (assoc clean-batch :cross-contact-risk #{:milk :tree-nuts} :declared-allergens #{:milk :tree-nuts})}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch :cross-contact-risk #{:milk :tree-nuts} :declared-allergens #{:milk :tree-nuts})}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -238,7 +260,7 @@
 (deftest sanitation-score-violation-test
   (testing "batch with insufficient sanitation score triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch :sanitation-score 60)}}
+          store (store/mem-store {:initial-batches {batch-id (assoc clean-batch :sanitation-score 60)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -250,9 +272,11 @@
 (deftest food-safety-flag-unresolved-violation-test
   (testing "batch with an unresolved food-safety flag triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id (assoc clean-batch
-                                            :safety-concern-raised? true
-                                            :safety-concern-resolved? false)}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch
+                                   :safety-concern-raised? true
+                                   :safety-concern-resolved? false)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -261,9 +285,11 @@
 
   (testing "batch with a resolved food-safety flag does not trigger this rule"
     (let [batch-id "batch-002"
-          store {:batches {batch-id (assoc clean-batch
-                                            :safety-concern-raised? true
-                                            :safety-concern-resolved? true)}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id (assoc clean-batch
+                                   :safety-concern-raised? true
+                                   :safety-concern-resolved? true)}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -274,7 +300,7 @@
 (deftest low-confidence-escalation-test
   (testing "low confidence proposal escalates even when hard checks pass"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :schedule-maintenance :subject batch-id}
           prop {:cites [{:spec "Equipment-Manual"}] :value {:jurisdiction :us/fda} :confidence 0.5}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -287,7 +313,7 @@
 (deftest high-stakes-escalation-test
   (testing "log-production-batch escalates even when all checks pass"
     (let [batch-id "batch-001"
-          store {:batches {batch-id clean-batch}}
+          store (store/mem-store {:initial-batches {batch-id clean-batch}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.95}
           result (governor/check req {:actor-id "gov-1"} prop store)]
@@ -300,9 +326,10 @@
 (deftest already-processed-violation-test
   (testing "batch already processed triggers hard violation"
     (let [batch-id "batch-001"
-          store {:batches {batch-id
-                           {:product-type :chocolate/dark
-                            :processed? true}}}
+          store (store/mem-store
+                 {:initial-batches
+                  {batch-id {:product-type :chocolate/dark
+                             :processed? true}}})
           req {:op :log-production-batch :subject batch-id}
           prop {:cites [{:spec "Codex-STAN-87"}] :value {:jurisdiction :us/fda} :confidence 0.8}
           result (governor/check req {:actor-id "gov-1"} prop store)]
