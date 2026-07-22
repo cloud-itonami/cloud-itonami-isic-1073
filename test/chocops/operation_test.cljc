@@ -1,7 +1,18 @@
 (ns chocops.operation-test
+  "Exercises the compiled `chocops.operation/build` langgraph-clj
+  StateGraph end-to-end (commit / hard-hold / escalate->approve->commit /
+  escalate->reject->hold), plus the closed-allowlist and
+  batch-registration hard blocks. Mirrors the coverage the prior
+  `run-operation` pure-function tests had (see `chocops.governor-test`'s
+  `effect-not-propose-violation-test` for the one prior case that
+  exercised the Governor directly with a non-:propose proposal --
+  unreachable through the graph now that the advisor always proposes
+  `:effect :propose`), now driven through `langgraph.graph/run*` against
+  the real compiled graph."
   (:require [clojure.test :refer [deftest is testing]]
+            [langgraph.graph :as g]
             [chocops.operation :as operation]
-            [chocops.governor :as governor]))
+            [chocops.store :as store]))
 
 (def ^:private now-ms #?(:clj (System/currentTimeMillis) :cljs (.now js/Date)))
 (def ^:private ten-days-ago (- now-ms (* 10 24 60 60 1000)))
@@ -24,104 +35,98 @@
    :evidence-checklist [:cocoa-bean-intake-record :roasting-conching-log :moisture-test :cocoa-content-test
                         :particle-size-test :tempering-temp-log :cadmium-test :allergen-declaration :weight-check]})
 
+(defn- run-op [actor tid request context]
+  (g/run* actor {:request request :context context} {:thread-id tid}))
+
+(defn- approve! [actor tid]
+  (g/run* actor {:approval {:status :approved :by "op-1"}} {:thread-id tid :resume? true}))
+
+(defn- reject! [actor tid]
+  (g/run* actor {:approval {:status :rejected :by "op-1"}} {:thread-id tid :resume? true}))
+
 (deftest run-operation-commit-test
-  (testing "clean, non-actuation proposal commits with no hold facts"
-    (let [store {:batches {"batch-001" clean-batch}}
-          request {:op :schedule-maintenance :subject "batch-001"}
-          proposal {:cites [{:spec "Equipment-Manual"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.9}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (true? (:ok? result)))
-      (is (= [] (:facts result))))))
+  (testing "clean, non-actuation proposal (schedule-maintenance) commits directly, no interrupt"
+    (let [st (store/mem-store {:initial-batches {"batch-001" clean-batch}})
+          actor (operation/build st)
+          request {:op :schedule-maintenance :subject "batch-001"
+                   :equipment "conche" :reason "routine-schedule"}
+          result (run-op actor "t1" request {:actor-id "op-1"})]
+      (is (= :done (:status result)))
+      (is (= :commit (get-in result [:state :disposition])))
+      (is (= 1 (count (store/ledger st))))
+      (is (= :committed (:t (first (store/ledger st))))))))
 
 (deftest run-operation-hold-test
-  (testing "hard-violating proposal (already-processed batch) produces a hold fact"
-    (let [store {:batches {"batch-002" {:processed? true}}}
+  (testing "hard-violating proposal (already-processed batch) produces a hold fact, no interrupt"
+    (let [st (store/mem-store {:initial-batches {"batch-002" (assoc clean-batch :processed? true)}})
+          actor (operation/build st)
           request {:op :log-production-batch :subject "batch-002"}
-          proposal {:cites [{:spec "Codex-STAN-87"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.9}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (= 1 (count (:facts result))))
-      (is (= :governor-hold (:t (first (:facts result)))))
-      (is (true? (:hard? (:verdict result)))))))
+          result (run-op actor "t2" request {:actor-id "op-1"})]
+      (is (= :done (:status result)))
+      (is (= :hold (get-in result [:state :disposition])))
+      (is (true? (get-in result [:state :verdict :hard?])))
+      (is (some #(= :already-processed (:rule %)) (get-in result [:state :verdict :violations])))
+      (is (= 1 (count (store/ledger st))))
+      (is (= :governor-hold (:t (first (store/ledger st))))))))
 
-(deftest run-operation-escalate-test
-  (testing "clean but high-stakes proposal is not auto-ok (escalation required)"
-    (let [store {:batches {"batch-003" clean-batch}}
+(deftest run-operation-escalate-approve-test
+  (testing "clean but high-stakes proposal (log-production-batch) interrupts before commit; approval commits and marks the batch processed"
+    (let [st (store/mem-store {:initial-batches {"batch-003" clean-batch}})
+          actor (operation/build st)
           request {:op :log-production-batch :subject "batch-003"}
-          proposal {:cites [{:spec "Codex-STAN-87"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.95}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (false? (:hard? (:verdict result))))
-      (is (true? (:escalate? (:verdict result))))
-      ;; operation.cljc has a single :ok?/not-ok? gate today; both hard-hold
-      ;; and escalate-only verdicts route through the same hold-fact-fn.
-      ;; Callers distinguish the two by inspecting `(:verdict result)`.
-      (is (= 1 (count (:facts result)))))))
+          r1 (run-op actor "t3" request {:actor-id "op-1"})]
+      (is (= :interrupted (:status r1)))
+      (is (false? (store/batch-already-processed? st "batch-003")))
+      (is (empty? (store/ledger st)) "no ledger fact until the human decides")
+      (let [r2 (approve! actor "t3")]
+        (is (= :done (:status r2)))
+        (is (= :commit (get-in r2 [:state :disposition])))
+        (is (true? (store/batch-already-processed? st "batch-003")))
+        (is (= 1 (count (store/ledger st))))
+        (is (= :committed (:t (first (store/ledger st)))))))))
 
-(deftest run-operation-food-safety-flag-always-escalates-test
-  (testing "a clean flag-food-safety-concern proposal is never auto-ok"
-    (let [store {:batches {"batch-004" clean-batch}}
-          request {:op :flag-food-safety-concern :subject "batch-004"}
-          proposal {:cites [{:spec "Plant-HACCP-Plan"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.99}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (false? (:hard? (:verdict result))))
-      (is (true? (:escalate? (:verdict result)))))))
+(deftest run-operation-escalate-reject-test
+  (testing "escalated proposal (flag-food-safety-concern) rejected by human operator produces a hold, not a commit"
+    (let [st (store/mem-store {:initial-batches {"batch-004" clean-batch}})
+          actor (operation/build st)
+          request {:op :flag-food-safety-concern :subject "batch-004" :concern "cross-contact suspicion"}
+          r1 (run-op actor "t4" request {:actor-id "op-1"})]
+      (is (= :interrupted (:status r1)))
+      (let [r2 (reject! actor "t4")]
+        (is (= :done (:status r2)))
+        (is (= :hold (get-in r2 [:state :disposition])))
+        (is (= 1 (count (store/ledger st))))
+        (is (= :approval-rejected (:t (first (store/ledger st)))))))))
 
 (deftest run-operation-op-not-allowed-test
   (testing "an out-of-allowlist op (e.g. direct tempering-line control) is a hard, permanent block"
-    (let [store {:batches {"batch-005" clean-batch}}
+    (let [st (store/mem-store {:initial-batches {"batch-005" clean-batch}})
+          actor (operation/build st)
           request {:op :control-tempering-line :subject "batch-005"}
-          proposal {:cites [{:spec "Tempering-Machine-Manual"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.99}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (true? (:hard? (:verdict result))))
-      (is (some #(= (:rule %) :op-not-allowed) (:violations (:verdict result)))))))
-
-(deftest run-operation-effect-not-propose-test
-  (testing "a proposal asserting a non-:propose effect is a hard, permanent block"
-    (let [store {:batches {"batch-006" clean-batch}}
-          request {:op :schedule-maintenance :subject "batch-006"}
-          proposal {:cites [{:spec "Equipment-Manual"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :commit
-                    :confidence 0.9}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (true? (:hard? (:verdict result))))
-      (is (some #(= (:rule %) :effect-not-propose) (:violations (:verdict result)))))))
+          result (run-op actor "t5" request {:actor-id "op-1"})]
+      (is (= :done (:status result)))
+      (is (= :hold (get-in result [:state :disposition])))
+      (is (some #(= :op-not-allowed (:rule %)) (get-in result [:state :verdict :violations]))))))
 
 (deftest run-operation-shipment-batch-not-registered-test
   (testing "coordinating shipment for a never-registered batch is a hard block"
-    (let [store {:batches {}}
+    (let [st (store/mem-store)
+          actor (operation/build st)
           request {:op :coordinate-shipment :subject "batch-999"}
-          proposal {:cites [{:spec "Shipment-Manual"}]
-                    :value {:jurisdiction :us/fda}
-                    :effect :propose
-                    :confidence 0.9}
-          context {:actor-id "op-1" :hold-fact-fn governor/hold-fact}
-          result (operation/run-operation request context proposal store governor/check)]
-      (is (false? (:ok? result)))
-      (is (true? (:hard? (:verdict result))))
-      (is (some #(= (:rule %) :batch-not-registered) (:violations (:verdict result)))))))
+          result (run-op actor "t6" request {:actor-id "op-1"})]
+      (is (= :done (:status result)))
+      (is (= :hold (get-in result [:state :disposition])))
+      (is (some #(= :batch-not-registered (:rule %)) (get-in result [:state :verdict :violations]))))))
+
+(deftest run-operation-coordinate-shipment-approve-test
+  (testing "coordinate-shipment escalates and, once approved, marks the batch shipment finalized"
+    (let [st (store/mem-store {:initial-batches {"batch-006" clean-batch}})
+          actor (operation/build st)
+          request {:op :coordinate-shipment :subject "batch-006"}
+          r1 (run-op actor "t7" request {:actor-id "op-1"})]
+      (is (= :interrupted (:status r1)))
+      (is (false? (store/batch-shipment-finalized? st "batch-006")))
+      (let [r2 (approve! actor "t7")]
+        (is (= :done (:status r2)))
+        (is (= :commit (get-in r2 [:state :disposition])))
+        (is (true? (store/batch-shipment-finalized? st "batch-006")))))))
