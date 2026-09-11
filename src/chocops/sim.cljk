@@ -1,5 +1,5 @@
 (ns chocops.sim
-  "Demo driver -- `clojure -M:dev:run`. Walks a registered dark-chocolate
+  "Demo driver -- `kbb -M:dev:run`. Walks a registered dark-chocolate
   production batch through a clean routine-op commit
   (`:schedule-maintenance`), an always-escalate high-stakes batch log
   (`:log-production-batch`, human approves -- marks the batch
@@ -93,7 +93,7 @@
     {:ledger (store/ledger st)}))
 
 (defn -main
-  "clojure -M:run entrypoint."
+  "kbb -M:run entrypoint."
   [& _args]
   (demo))
 
