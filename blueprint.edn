@@ -37,5 +37,5 @@
  append-only ledger, and an approved `:log-production-batch` /
  `:coordinate-shipment` also flips the batch's `:processed?` /
  `:shipment-finalized?` flag on the Store -- 58 tests / 207 assertions
- green (`clojure -M:dev:test`), demo runnable end-to-end against both
- Store backends (`clojure -M:dev:run`)."}
+ green (`kbb -M:dev:test`), demo runnable end-to-end against both
+ Store backends (`kbb -M:dev:run`)."}

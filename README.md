@@ -20,8 +20,8 @@ append-only audit ledger (`ledger`/`append-ledger!`), implemented on both
 (`test/chocops/store_contract_test.cljk`); an approved
 `:log-production-batch` / `:coordinate-shipment` also flips the batch's
 `:processed?` / `:shipment-finalized?` flag on the Store. 58 tests / 207
-assertions green (`clojure -M:dev:test`); the demo runner
-(`clojure -M:dev:run`) drives the compiled graph end-to-end through a
+assertions green (`kbb -M:dev:test`); the demo runner
+(`kbb -M:dev:run`) drives the compiled graph end-to-end through a
 commit path, an escalate→approve→commit path (which marks a real batch
 processed), an escalate→reject→hold path, and a hard-hold path, printing
 the resulting audit ledger.
@@ -95,14 +95,14 @@ plant-manufacturing compliance domain:
 - `chocops.governor` — the Chocolate Governor: 18+ hard invariants + escalation gates
 - `chocops.phase` — the PRODUCTION-BATCH workflow-state machine (`:intake -> :roasting -> :conching -> :tempering -> :molding -> :package -> :audit -> :archived`); informational/reference only, not part of the `operation` StateGraph (a different concept from the agriculture verticals' 0→3 rollout phase gate)
 - `chocops.operation` — compiles the `langgraph-clj` `StateGraph`: advise → govern → decide → commit | request-approval → commit | hold, with `interrupt-before` + checkpoint-based resume for the always-escalate ops
-- `chocops.sim` — demo runner (`clojure -M:dev:run`)
+- `chocops.sim` — demo runner (`kbb -M:dev:run`)
 
 ## Testing
 
 ```bash
-clojure -M:dev:test   # run the test suite (langgraph/langchain-store resolved via local sibling checkouts)
-clojure -M:lint       # clj-kondo, 0 errors / 0 warnings
-clojure -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
+kbb -M:dev:test   # run the test suite (langgraph/langchain-store resolved via local sibling checkouts)
+kbb -M:lint       # clj-kondo, 0 errors / 0 warnings
+kbb -M:dev:run    # demo runner -- drives the compiled StateGraph end-to-end
 ```
 
 `:dev` pins the transitive `langchain` dependency to the in-monorepo local
