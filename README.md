@@ -17,7 +17,7 @@ approval-rejected decision fact is appended to `chocops.store`'s
 append-only audit ledger (`ledger`/`append-ledger!`), implemented on both
 `MemStore` and a `DatomicStore` (backed by `langchain.db` via
 `kotoba-lang/langchain-store`) that pass the same store-contract test
-(`test/chocops/store_contract_test.cljc`); an approved
+(`test/chocops/store_contract_test.cljk`); an approved
 `:log-production-batch` / `:coordinate-shipment` also flips the batch's
 `:processed?` / `:shipment-finalized?` flag on the Store. 58 tests / 207
 assertions green (`clojure -M:dev:test`); the demo runner
