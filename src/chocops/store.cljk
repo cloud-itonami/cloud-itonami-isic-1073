@@ -14,7 +14,7 @@
                         `langchain.db`'s `:db-api` (see langchain.kotoba-db).
 
   Both implement the same protocol and pass the same contract
-  (test/chocops/store_contract_test.cljc).
+  (test/chocops/store_contract_test.cljk).
 
   A production batch is the minimal unit of work: one processing run of
   a cocoa/chocolate/confectionery product, tracked from cocoa-bean (or
