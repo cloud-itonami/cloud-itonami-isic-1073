@@ -1,7 +1,7 @@
 (ns chocops.store-contract-test
   "MemStore ≡ DatomicStore parity for the Store protocol. Mirrors
   `cerealops.store-contract-test` (cloud-itonami-isic-0111)."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [kotoba.test :refer [deftest is]]
             [chocops.store :as store]))
 
 (defn- exercise [s]

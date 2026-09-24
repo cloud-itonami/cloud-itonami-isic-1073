@@ -1,5 +1,5 @@
 (ns chocops.phase-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [chocops.phase :as phase]))
 
 ;; ──────────────────────── Phase Validity ──────────────────────
