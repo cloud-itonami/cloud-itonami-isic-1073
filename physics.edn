@@ -1,0 +1,22 @@
+{:physics/schema "itonami.physical-ai.spec.v1"
+ :repo "cloud-itonami/cloud-itonami-isic-1073"
+ :cases
+ [{:id :tempered-chocolate-transfer
+   :kind :pipe-flow
+   :procedure "pump moves tempered chocolate from the tempering machine to the moulding depositor through a jacketed 50 mm line"
+   :params {:diameter-m 0.05 :length-m 15.0 :roughness-m 1.5e-6
+            :density-kg-m3 1250.0 :viscosity-pa-s 3.0 :pump-efficiency 0.5 :elevation-m 2.0}
+   :sweep {:param :q-m3s :values [1.0e-4 2.0e-4 3.0e-4 4.0e-4 5.0e-4]}
+   :quantity :pressure-drop-pa
+   :limit {:max 1.0e6 :basis "estimate: ~10 bar rating of a chocolate lobe/gear pump (Newtonian approximation; chocolate is Casson-plastic)"}
+   :boundary {:lo 2.0e-5 :hi 0.005}}
+  {:id :bar-mould-cooling
+   :kind :thermal
+   :procedure "filled bar moulds pass through the cooling tunnel; the chocolate against the mould must be cool enough to demould"
+   :params {:thickness-m 0.010 :conductivity-w-mk 0.20 :density-kg-m3 1250.0 :specific-heat-j-kgk 1600.0
+            :t0-c 30.0 :t-hot-c 10.0 :h-front-w-m2k 25.0 :h-back-w-m2k 5.0 :t-back-ambient-c 10.0
+            :threshold-c 18.0 :nodes 21}
+   :sweep {:param :duration-s :values [300.0 600.0 900.0 1200.0 1500.0]}
+   :quantity :final-back-c
+   :limit {:max 18.0 :basis "estimate: demoulding when the chocolate at the mould face is below ~18 C; latent heat of cocoa-butter crystallisation is not modelled"}
+   :boundary {:lo 60.0 :hi 5000.0}}]}
