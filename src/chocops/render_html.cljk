@@ -72,7 +72,7 @@
 
   Usage: `kbb -M:dev:render-html [out-file]`
   (default `docs/samples/operator-console.html`)."
-  (:require [jp-go-dds.skin]
+  (:require [kotoba.io :as kio] [jp-go-dds.skin]
             [kotoba.lang.text :as str]
             [chocops.store :as store]
             [chocops.facts :as facts]
@@ -828,7 +828,7 @@
         result (run-demo!)
         {:keys [holds rules]} (assert-real-holds! result)
         html (render result)]
-    (when-let [p (.getParentFile (java.io.File. ^String out))] (.mkdirs p))
+    (when-let [p (kio/parent-file (kio/file ^String out))] (kio/mkdirs p))
     (spit out html)
     (println "wrote" out
              (str "(" (count (store/ledger (:db result))) " ledger facts, "
