@@ -9,7 +9,7 @@
   unreachable through the graph now that the advisor always proposes
   `:effect :propose`), now driven through `langgraph.graph/run*` against
   the real compiled graph."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [kotoba.test :refer [deftest is testing]]
             [langgraph.graph :as g]
             [chocops.operation :as operation]
             [chocops.store :as store]))
